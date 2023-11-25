@@ -7,6 +7,26 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
+#include <esp_mac.h>
+#include "esp_system.h"
+#include "esp_sleep.h"
+#include "sys/time.h"
+
+#define GPIO_DEEP_SLEEP_DURATION     2  // sleep x seconds and then wake up
+RTC_DATA_ATTR static time_t last;        // remember last boot in RTC Memory
+RTC_DATA_ATTR static uint32_t bootcount; // remember number of boots in RTC Memory
+RTC_DATA_ATTR static uint16_t count; 
+RTC_DATA_ATTR static uint8_t new_mac[6]; 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint8_t temprature_sens_read();
+//uint8_t g_phyFuns;
+
+#ifdef __cplusplus
+}
+#endif
 
 #ifndef COUNT_OF
 #define COUNT_OF(x) (sizeof(x) / sizeof(x[0]))
@@ -18,48 +38,14 @@ BLEAdvertising *pAdvertising;  // global variable
 int deviceType = 1; // 1 for Airpods, 2 for Airpods Pro, 3 for Airpods Max, 4 for...
 int delaySeconds = 2; // delay in seconds
 int advType = 2; 
-uint8_t new_mac[6] = {0x00, 0x02, 0x03, 0xA4, 0x05, 0x04};
+
 
 const struct {
     uint32_t value;
     const char* name;
 } models[] = {
     // Genuine non-production/forgotten (good job Google)
-    {0x0001F0, "Bisto CSR8670 Dev Board"},
-    {0x000047, "Arduino 101"},
-    {0x470000, "Arduino 101 2"},
-    {0x00000A, "Anti-Spoof Test"},
-    {0x0A0000, "Anti-Spoof Test 2"},
-    {0x00000B, "Google Gphones"},
-    {0x0B0000, "Google Gphones 2"},
-    {0x0C0000, "Google Gphones 3"},
-    {0x00000D, "Test 00000D"},
-    {0x000007, "Android Auto"},
-    {0x070000, "Android Auto 2"},
-    {0x000008, "Foocorp Foophones"},
-    {0x080000, "Foocorp Foophones 2"},
-    {0x000009, "Test Android TV"},
-    {0x090000, "Test Android TV 2"},
-    {0x000035, "Test 000035"},
-    {0x350000, "Test 000035 2"},
-    {0x000048, "Fast Pair Headphones"},
-    {0x480000, "Fast Pair Headphones 2"},
-    {0x000049, "Fast Pair Headphones 3"},
-    {0x490000, "Fast Pair Headphones 4"},
-    {0x001000, "LG HBS1110"},
-    {0x00B727, "Smart Controller 1"},
-    {0x01E5CE, "BLE-Phone"},
-    {0x0200F0, "Goodyear"},
-    {0x00F7D4, "Smart Setup"},
-    {0xF00002, "Goodyear"},
-    {0xF00400, "T10"},
-    {0x1E89A7, "ATS2833_EVB"},
-
-    // Phone setup
-    {0x00000C, "Google Gphones Transfer"},
-    {0x0577B1, "Galaxy S23 Ultra"},
-    {0x05A9BC, "Galaxy S20+"},
-
+    {0x92BBBD, "Pixel Buds"},
     // Genuine devices
     {0xCD8256, "Bose NC 700"},
     {0x0000F0, "Bose QuietComfort 35 II"},
@@ -565,20 +551,38 @@ const struct {
 };
 
 const uint16_t models_count = COUNT_OF(models);
+uint8_t mac[6] = {0};
+
+void mac_cycle() {
+  // Imposta il primo byte con il valore fisso 0x02 (indica un indirizzo unicast)
+  new_mac[0] = 0x02;
+
+  // Genera i restanti byte in modo casuale nel range da 0x00 a 0xFF
+  for (int i = 1; i < 6; ++i) {
+    new_mac[i] = random(256);
+  }
+}
 
 void setup() {
+
   Serial.begin(115200);
   Serial.println("Starting ESP32 BLE");
   
-  uint8_t mac[6] = {0};
-  esp_read_mac(mac, ESP_MAC);
-  Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X\n", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+  // esp_read_mac(mac, ESP_MAC_BT);
+  // Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X\n", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+  // esp_base_mac_addr_set(new_mac);
+  // esp_read_mac(mac, ESP_MAC_BT);
+  // Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X\n", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+  // new_mac[5] = new_mac[5] + 0x01;
+  uint32_t model;
+  const char *name;
+  
+  mac_cycle();
   esp_base_mac_addr_set(new_mac);
-  esp_read_mac(mac, ESP_MAC_BT);
-  Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
-  new_mac[5] = new_mac[5] + 0x01;
-
-  BLEDevice::init("Air Pods");
+  model = models[count].value;
+  name = models[count].name;
+  Serial.printf("%x\n", model);
+  BLEDevice::init(String(name));
 
 
   // Create the BLE Server
@@ -589,12 +593,6 @@ void setup() {
   BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
 
   // Payload data
-    uint32_t model;
-    char *name;
-    uint16_t count = rand() % models_count;
-
-    model = models[count].value;
-    name = models[count].name;
 
     uint8_t size = 14;
     uint8_t packet[size];
@@ -613,15 +611,14 @@ void setup() {
     packet[i++] = (model >> 0x10) & 0xFF; // Device Model
     packet[i++] = (model >> 0x08) & 0xFF; // ...
     packet[i++] = (model >> 0x00) & 0xFF; // ...
-
     packet[i++] = 2; // Size
     packet[i++] = 0x0A; // AD Type (Tx Power Level)
     packet[i++] = (rand() % 120) - 100; // -100 to +20 dBm
   
 
   // Set up the advertisement data
-    oAdvertisementData.addData(std::string((char*)packet, sizeof(packet)));
-    Serial.printf("Name: %s", name);
+    oAdvertisementData.addData(String((char*)packet, sizeof(packet)));
+    Serial.printf("Name: %s\n", name);
     Serial.printf("0x");
     for (int i = 0; i < 14; i++)
     {
@@ -629,15 +626,20 @@ void setup() {
     }
     Serial.printf("\n");
     pAdvertising->setAdvertisementData(oAdvertisementData);
+  pinMode(2, OUTPUT);
 }
 
 void loop() {
   // Start advertising
-  esp_read_mac(mac, ESP_MAC_BT);
-  Serial.printf("new MAC: %02X:%02X:%02X:%02X:%02X:%02X", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
-  new_mac[5] = new_mac[5] + 0x01;
-  Serial.println("Sending Advertisement...");
+  
   pAdvertising->start();
-  delay(delaySeconds * 10000); // delay for delaySeconds seconds
+  Serial.printf("couunt %d\n", count);
+  count = count + 1;
+  if (count > 500)
+    count = 0;
+  Serial.printf("Start\n");
+  delay(delaySeconds * 100); // delay for delaySeconds seconds
   pAdvertising->stop();
+  esp_deep_sleep(1000000LL * GPIO_DEEP_SLEEP_DURATION);
+  
 }
