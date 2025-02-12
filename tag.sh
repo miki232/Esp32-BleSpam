@@ -46,6 +46,6 @@ fi
 for tag in "${tags[@]}"; do
     tag_name="${tag}_${version}"
     echo "Creazione tag: $tag_name"
-    # git tag -a "$tag_name" -m "Tag creato automaticamente: $tag_name"
-    # git push origin "$tag_name"
+    git tag -a "$tag_name" -m "Tag creato automaticamente: $tag_name"
+    git push origin "$tag_name"
 done
